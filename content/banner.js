@@ -231,7 +231,7 @@ const ScaimBanner = {
         chrome.runtime.sendMessage({
           type: "SCAIM_ALLOWLIST_ADD",
           hostname: hostname
-        });
+        }, () => { if (chrome.runtime.lastError) { /* ignore */ } });
       } catch (e) { /* ignore */ }
       // Remove banner immediately
       banner.classList.remove("scaim-visible");

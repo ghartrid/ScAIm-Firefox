@@ -180,6 +180,7 @@ document.addEventListener("DOMContentLoaded", () => {
         type: "SCAIM_ALLOWLIST_ADD",
         hostname: currentHostname
       }, () => {
+        if (chrome.runtime.lastError) { /* content script may not be available */ }
         trustBtn.style.display = "none";
         blockBtn.style.display = "";
         domainNote.textContent = currentHostname + " added to trusted list. It will no longer be scanned.";
@@ -199,6 +200,7 @@ document.addEventListener("DOMContentLoaded", () => {
         type: "SCAIM_BLOCKLIST_ADD",
         hostname: currentHostname
       }, () => {
+        if (chrome.runtime.lastError) { /* content script may not be available */ }
         blockBtn.style.display = "none";
         trustBtn.style.display = "";
         domainNote.textContent = currentHostname + " added to blocklist. It will always be flagged as dangerous.";

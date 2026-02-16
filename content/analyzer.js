@@ -179,7 +179,7 @@ const ScaimAnalyzer = {
           allowlisted: assessment.allowlisted || false,
           blocklisted: assessment.blocklisted || false
         }
-      });
+      }, () => { if (chrome.runtime.lastError) { /* ignore */ } });
     } catch (e) {
       // Extension context may be invalidated — ignore
     }

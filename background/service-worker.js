@@ -72,7 +72,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           // Notify the active tab to re-run analysis
           chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             if (tabs[0]) {
-              chrome.tabs.sendMessage(tabs[0].id, { type: "SCAIM_RERUN" });
+              chrome.tabs.sendMessage(tabs[0].id, { type: "SCAIM_RERUN" }, () => { if (chrome.runtime.lastError) { /* ignore */ } });
             }
           });
           sendResponse({ ok: true });
@@ -112,7 +112,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }, () => {
           chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             if (tabs[0]) {
-              chrome.tabs.sendMessage(tabs[0].id, { type: "SCAIM_RERUN" });
+              chrome.tabs.sendMessage(tabs[0].id, { type: "SCAIM_RERUN" }, () => { if (chrome.runtime.lastError) { /* ignore */ } });
             }
           });
           sendResponse({ ok: true });
