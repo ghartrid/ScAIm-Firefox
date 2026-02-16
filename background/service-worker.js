@@ -6,6 +6,12 @@
 // Per-tab threat data
 const tabData = {};
 
+// Validate hostname before adding to lists
+function isValidHostname(h) {
+  return typeof h === "string" && h.length >= 4 && h.includes(".") &&
+    /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(h);
+}
+
 // Badge configuration for each level
 const BADGE_CONFIG = {
   safe: { text: "OK", color: "#28A745" },
@@ -58,13 +64,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Domain list management from popup
   if (message.type === "SCAIM_ALLOWLIST_ADD") {
+    const h = (message.hostname || "").toLowerCase();
+    if (!isValidHostname(h)) { sendResponse({ ok: false }); return; }
     chrome.storage.local.get("scaim_allowlist", (result) => {
       const list = new Set(result.scaim_allowlist || []);
-      list.add(message.hostname.toLowerCase());
+      list.add(h);
       // Remove from blocklist if present
       chrome.storage.local.get("scaim_blocklist", (blockResult) => {
         const blockList = new Set(blockResult.scaim_blocklist || []);
-        blockList.delete(message.hostname.toLowerCase());
+        blockList.delete(h);
         chrome.storage.local.set({
           scaim_allowlist: [...list],
           scaim_blocklist: [...blockList]
@@ -99,13 +107,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "SCAIM_BLOCKLIST_ADD") {
+    const bh = (message.hostname || "").toLowerCase();
+    if (!isValidHostname(bh)) { sendResponse({ ok: false }); return; }
     chrome.storage.local.get("scaim_blocklist", (result) => {
       const list = new Set(result.scaim_blocklist || []);
-      list.add(message.hostname.toLowerCase());
+      list.add(bh);
       // Remove from allowlist if present
       chrome.storage.local.get("scaim_allowlist", (allowResult) => {
         const allowList = new Set(allowResult.scaim_allowlist || []);
-        allowList.delete(message.hostname.toLowerCase());
+        allowList.delete(bh);
         chrome.storage.local.set({
           scaim_blocklist: [...list],
           scaim_allowlist: [...allowList]

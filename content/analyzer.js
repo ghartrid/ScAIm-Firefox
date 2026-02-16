@@ -319,6 +319,9 @@ window[_scaimGuardKey] = true;
 
 // Listen for messages from popup/background (inside guard to prevent duplicate listeners)
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Only accept messages from our own extension (defense in depth)
+  if (sender.id !== chrome.runtime.id) return;
+
   if (message.type === "SCAIM_GET_RESULTS") {
     if (ScaimAnalyzer._results) {
       sendResponse(ScaimAnalyzer._results);

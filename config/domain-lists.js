@@ -193,6 +193,9 @@ const DomainLists = {
    */
   async addToAllowlist(hostname) {
     hostname = hostname.toLowerCase();
+    if (!this._isValidHostname(hostname)) return;
+    // Refuse to allowlist shared hosting roots (e.g., github.io)
+    if (this.SHARED_HOSTING.has(hostname)) return;
     this._userAllowlist.add(hostname);
     // Remove from blocklist if present
     this._userBlocklist.delete(hostname);
@@ -215,6 +218,7 @@ const DomainLists = {
    */
   async addToBlocklist(hostname) {
     hostname = hostname.toLowerCase();
+    if (!this._isValidHostname(hostname)) return;
     this._userBlocklist.add(hostname);
     // Remove from allowlist if present
     this._userAllowlist.delete(hostname);
@@ -240,6 +244,17 @@ const DomainLists = {
       allowlist: [...this._userAllowlist].sort(),
       blocklist: [...this._userBlocklist].sort()
     };
+  },
+
+  /**
+   * Validate that a hostname is well-formed before adding to lists.
+   * Rejects empty strings, strings without dots, bare TLDs, and invalid characters.
+   */
+  _isValidHostname(hostname) {
+    return typeof hostname === "string" &&
+      hostname.length >= 4 &&
+      hostname.includes(".") &&
+      /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(hostname);
   },
 
   /**
