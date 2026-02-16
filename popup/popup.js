@@ -1,0 +1,385 @@
+/**
+ * ScAIm Popup Script
+ * Displays threat analysis for the current page.
+ * Provides Scan Page, Trust Site, and Block Site actions.
+ */
+
+const STATUS_CONFIG = {
+  safe: { icon: "\u2705", text: "No threats detected" },
+  caution: { icon: "\u26A0\uFE0F", text: "Some concerns detected" },
+  warning: { icon: "\u{1F6A8}", text: "Multiple suspicious elements found" },
+  danger: { icon: "\u{1F6D1}", text: "High risk — potential scam detected" }
+};
+
+document.addEventListener("DOMContentLoaded", () => {
+  const toggle = document.getElementById("scaim-enabled");
+  const statusEl = document.getElementById("scaim-status");
+  const statusIcon = document.getElementById("scaim-status-icon");
+  const statusText = document.getElementById("scaim-status-text");
+  const scoreSection = document.getElementById("scaim-score-section");
+  const scoreBar = document.getElementById("scaim-score-bar");
+  const scoreValue = document.getElementById("scaim-score-value");
+  const findingsSection = document.getElementById("scaim-findings-section");
+  const findingsList = document.getElementById("scaim-findings-list");
+  const noData = document.getElementById("scaim-no-data");
+  const popup = document.querySelector(".scaim-popup");
+
+  const scanBtn = document.getElementById("scaim-scan-btn");
+  const trustBtn = document.getElementById("scaim-trust-btn");
+  const blockBtn = document.getElementById("scaim-block-btn");
+  const scanStatus = document.getElementById("scaim-scan-status");
+  const domainNote = document.getElementById("scaim-domain-note");
+
+  let currentHostname = null;
+
+  // ---- Notification Mode ----
+  const modeBtns = document.querySelectorAll(".scaim-mode-btn");
+
+  // Load saved mode
+  chrome.storage.local.get("notificationMode", (result) => {
+    const mode = result.notificationMode || "full";
+    modeBtns.forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.mode === mode);
+    });
+  });
+
+  // Mode button click handler
+  modeBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.mode;
+      chrome.storage.local.set({ notificationMode: mode });
+      modeBtns.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+
+      // Notify content script to update banner immediately
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+          chrome.tabs.sendMessage(tabs[0].id, {
+            type: "SCAIM_MODE_CHANGED",
+            mode: mode
+          }, () => { if (chrome.runtime.lastError) { /* ignore */ } });
+        }
+      });
+    });
+  });
+
+  // Load enabled state
+  chrome.runtime.sendMessage({ type: "SCAIM_GET_STATE" }, (response) => {
+    if (response) {
+      toggle.checked = response.enabled;
+      if (!response.enabled) popup.classList.add("disabled");
+    }
+  });
+
+  // Toggle handler
+  toggle.addEventListener("change", () => {
+    chrome.runtime.sendMessage({ type: "SCAIM_TOGGLE" }, (response) => {
+      if (response) {
+        popup.classList.toggle("disabled", !response.enabled);
+      }
+    });
+  });
+
+  // Content script files (same order as manifest)
+  const CONTENT_SCRIPTS = [
+    "config/keywords.js", "config/domain-lists.js",
+    "shared/text-normalizer.js", "shared/scoring.js",
+    "detectors/keyword-scanner.js", "detectors/structural.js", "detectors/phishing.js",
+    "detectors/social-engineering.js", "detectors/fake-ecommerce.js",
+    "detectors/crypto-scam.js", "detectors/tech-support.js",
+    "detectors/romance-fee.js", "detectors/malicious-download.js",
+    "content/banner.js", "content/social-media-scanner.js", "content/analyzer.js"
+  ];
+
+  function finishScan(tabId) {
+    // Wait for scan to complete, then query content script directly for results
+    setTimeout(() => {
+      if (!tabId) {
+        loadTabData();
+        scanBtn.classList.remove("scanning");
+        scanBtn.textContent = "\u{1F50D} Scan Page";
+        scanStatus.style.display = "none";
+        return;
+      }
+
+      chrome.tabs.get(tabId, (tab) => {
+        let hostname = "";
+        if (tab && tab.url) try { hostname = new URL(tab.url).hostname; } catch (e) {}
+
+        chrome.tabs.sendMessage(tabId, { type: "SCAIM_GET_RESULTS" }, (results) => {
+          if (!chrome.runtime.lastError && results) {
+            renderResults({
+              level: results.level,
+              score: results.score,
+              findings: results.findings || [],
+              summary: results.summary,
+              hostname: hostname,
+              allowlisted: results.allowlisted || false,
+              blocklisted: results.blocklisted || false
+            });
+          } else {
+            loadTabData();
+          }
+          scanBtn.classList.remove("scanning");
+          scanBtn.textContent = "\u{1F50D} Scan Page";
+          scanStatus.style.display = "none";
+        });
+      });
+    }, 2500);
+  }
+
+  // Inject content scripts programmatically (fallback when scripts aren't loaded)
+  function injectAndScan(tabId) {
+    chrome.scripting.insertCSS({ target: { tabId }, files: ["content/banner.css"] }).catch(() => {});
+    chrome.scripting.executeScript({
+      target: { tabId },
+      files: CONTENT_SCRIPTS
+    }).then(() => {
+      // Scripts injected — give them a moment to initialize, then trigger scan
+      setTimeout(() => {
+        chrome.tabs.sendMessage(tabId, { type: "SCAIM_RERUN" }, () => {
+          if (chrome.runtime.lastError) { /* ignore */ }
+          finishScan(tabId);
+        });
+      }, 1000);
+    }).catch(() => {
+      finishScan();
+    });
+  }
+
+  // ---- Scan Page button ----
+  scanBtn.addEventListener("click", () => {
+    scanBtn.classList.add("scanning");
+    scanBtn.textContent = "Scanning...";
+    scanStatus.style.display = "block";
+
+    // Hide old results during re-scan
+    scoreSection.style.display = "none";
+    findingsSection.style.display = "none";
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs[0]) return;
+      const tabId = tabs[0].id;
+      chrome.tabs.sendMessage(tabId, { type: "SCAIM_RERUN" }, () => {
+        if (chrome.runtime.lastError) {
+          // Content script not available — inject it programmatically
+          injectAndScan(tabId);
+        } else {
+          finishScan(tabId);
+        }
+      });
+    });
+  });
+
+  // ---- Trust Site button ----
+  trustBtn.addEventListener("click", () => {
+    if (!currentHostname) return;
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs[0]) return;
+      chrome.tabs.sendMessage(tabs[0].id, {
+        type: "SCAIM_ALLOWLIST_ADD",
+        hostname: currentHostname
+      }, () => {
+        trustBtn.style.display = "none";
+        blockBtn.style.display = "";
+        domainNote.textContent = currentHostname + " added to trusted list. It will no longer be scanned.";
+        domainNote.className = "scaim-domain-note allowlisted";
+        domainNote.style.display = "block";
+        setTimeout(() => loadTabData(), 1500);
+      });
+    });
+  });
+
+  // ---- Block Site button ----
+  blockBtn.addEventListener("click", () => {
+    if (!currentHostname) return;
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs[0]) return;
+      chrome.tabs.sendMessage(tabs[0].id, {
+        type: "SCAIM_BLOCKLIST_ADD",
+        hostname: currentHostname
+      }, () => {
+        blockBtn.style.display = "none";
+        trustBtn.style.display = "";
+        domainNote.textContent = currentHostname + " added to blocklist. It will always be flagged as dangerous.";
+        domainNote.className = "scaim-domain-note blocklisted";
+        domainNote.style.display = "block";
+        setTimeout(() => loadTabData(), 1500);
+      });
+    });
+  });
+
+  // ---- Load tab data ----
+  // Tries: (1) content script directly, (2) background, (3) auto-inject content scripts.
+  function loadTabData() {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs[0]) {
+        renderResults(null);
+        return;
+      }
+
+      const tab = tabs[0];
+      let tabHostname = "";
+      try { tabHostname = new URL(tab.url || "").hostname; } catch (e) {}
+
+      // Can't inject into chrome:// or edge:// pages
+      if (!tab.url || tab.url.startsWith("chrome") || tab.url.startsWith("edge") || tab.url.startsWith("about") || tab.url.startsWith("moz-extension")) {
+        renderResults(null);
+        return;
+      }
+
+      // Primary: query content script directly (survives service worker restarts).
+      chrome.tabs.sendMessage(tab.id, { type: "SCAIM_GET_RESULTS" }, (results) => {
+        if (!chrome.runtime.lastError && results) {
+          renderResults({
+            level: results.level,
+            score: results.score,
+            findings: results.findings || [],
+            summary: results.summary,
+            hostname: tabHostname,
+            allowlisted: results.allowlisted || false,
+            blocklisted: results.blocklisted || false
+          });
+          return;
+        }
+
+        // Content script not responding — try background
+        chrome.runtime.sendMessage({ type: "SCAIM_GET_TAB_DATA" }, (bgData) => {
+          if (bgData) {
+            renderResults(bgData);
+            return;
+          }
+
+          // No data anywhere — auto-inject content scripts and scan
+          autoInjectAndLoad(tab.id, tabHostname);
+        });
+      });
+    });
+  }
+
+  // Auto-inject content scripts when they're missing, then load results
+  function autoInjectAndLoad(tabId, hostname) {
+    chrome.scripting.insertCSS({ target: { tabId }, files: ["content/banner.css"] }).catch(() => {});
+    chrome.scripting.executeScript({
+      target: { tabId },
+      files: CONTENT_SCRIPTS
+    }).then(() => {
+      // Scripts injected — wait for scan to complete, then get results
+      setTimeout(() => {
+        chrome.tabs.sendMessage(tabId, { type: "SCAIM_GET_RESULTS" }, (results) => {
+          if (!chrome.runtime.lastError && results) {
+            renderResults({
+              level: results.level,
+              score: results.score,
+              findings: results.findings || [],
+              summary: results.summary,
+              hostname: hostname,
+              allowlisted: results.allowlisted || false,
+              blocklisted: results.blocklisted || false
+            });
+          } else {
+            renderResults(null);
+          }
+        });
+      }, 2000);
+    }).catch(() => {
+      renderResults(null);
+    });
+  }
+
+  // ---- Render results in the popup ----
+  function renderResults(data) {
+    if (!data) {
+      statusEl.style.display = "none";
+      noData.style.display = "block";
+      trustBtn.style.display = "none";
+      blockBtn.style.display = "none";
+      return;
+    }
+
+    noData.style.display = "none";
+    statusEl.style.display = "block";
+    currentHostname = data.hostname;
+
+    const config = STATUS_CONFIG[data.level] || STATUS_CONFIG.safe;
+
+    // Update status
+    statusEl.className = "scaim-status " + data.level;
+    statusIcon.textContent = config.icon;
+    // Show hostname in safe message so user knows the scan ran
+    if (data.level === "safe" && data.hostname) {
+      statusText.textContent = data.hostname + " scanned — no threats detected";
+    } else {
+      statusText.textContent = config.text;
+    }
+
+    // Update score bar
+    scoreSection.style.display = "block";
+    scoreValue.textContent = data.score;
+    scoreBar.className = "scaim-score-bar " + data.level;
+    setTimeout(() => {
+      scoreBar.style.width = data.score + "%";
+    }, 100);
+
+    // Show/hide trust and block buttons based on current state
+    if (data.allowlisted) {
+      trustBtn.style.display = "none";
+      blockBtn.style.display = "";
+      domainNote.textContent = currentHostname + " is on your trusted list.";
+      domainNote.className = "scaim-domain-note allowlisted";
+      domainNote.style.display = "block";
+    } else if (data.blocklisted) {
+      trustBtn.style.display = "";
+      blockBtn.style.display = "none";
+      domainNote.textContent = currentHostname + " is on your blocklist.";
+      domainNote.className = "scaim-domain-note blocklisted";
+      domainNote.style.display = "block";
+    } else {
+      trustBtn.style.display = "";
+      blockBtn.style.display = "";
+      domainNote.style.display = "none";
+    }
+
+    // Render findings
+    if (data.findings && data.findings.length > 0) {
+      findingsSection.style.display = "block";
+      const VALID_SEVERITIES = ["critical", "high", "medium", "low"];
+      findingsList.textContent = "";
+      data.findings.forEach(f => {
+        const sev = VALID_SEVERITIES.includes(f.severity) ? f.severity : "low";
+
+        const item = document.createElement("div");
+        item.className = "scaim-finding-item " + sev;
+
+        const header = document.createElement("div");
+        header.className = "scaim-finding-item-header";
+
+        const badge = document.createElement("span");
+        badge.className = "scaim-finding-badge " + sev;
+        badge.textContent = sev;
+
+        const cat = document.createElement("span");
+        cat.className = "scaim-finding-category";
+        cat.textContent = f.category;
+
+        header.appendChild(badge);
+        header.appendChild(cat);
+
+        const msg = document.createElement("div");
+        msg.className = "scaim-finding-message";
+        msg.textContent = f.message;
+
+        item.appendChild(header);
+        item.appendChild(msg);
+        findingsList.appendChild(item);
+      });
+    } else {
+      findingsSection.style.display = "none";
+      findingsList.textContent = "";
+    }
+  }
+
+  // Initial load
+  loadTabData();
+});
+
