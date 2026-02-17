@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ScAIm",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Paranoid scam detection for every page you visit. All analysis runs locally — no data is ever collected or sent.",
   "permissions": [
     "activeTab",
